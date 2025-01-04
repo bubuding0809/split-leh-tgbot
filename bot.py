@@ -1,0 +1,419 @@
+import base64
+import html
+import json
+import logging
+import os
+import traceback
+from typing import Optional
+import telegram
+from telegram import (
+    BotCommand,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+    KeyboardButtonRequestUsers,
+    ReplyKeyboardRemove,
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    helpers,
+)
+from telegram.constants import ParseMode
+from telegram.ext import (
+    ApplicationBuilder,
+    ContextTypes,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    Application,
+)
+from env import env
+from api import Api, CreateChatPayload
+
+# * Setup loggin
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+# set higher logging level for httpx to avoid all GET and POST requests being logged
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logger = logging.getLogger(__name__)
+
+START_MESSAGE_EXISITING = """
+Welcome back to Leftunder, {username}! 🌟 We're thrilled to see you again. Here's a quick reminder of the great features you can start using right away.
+
+📋 Pantry Tracker: Organize pantry items and track expiration dates. 
+
+💡 Storage Tips: Maximize shelf life with expert storage advice.
+
+🍲 Recipe Generator 🚧: Get recipes based on your available ingredients.
+
+💚 Support Your Community 🚧: Share surplus or find essentials with a tap, ensuring nothing goes to waste.
+
+Start by sending a picture or multiple pictures 📸 of the food items you want to track!
+"""
+
+START_MESSAGE_NEW = """
+Welcome to LeftUnder, {user}! 🎉
+
+We have just signed you up for the LeftUnder food tracker.
+
+Try the food tracker by sending a picture or multiple pictures 📸 of the food items you want to track! 🥗🍎🥖
+"""
+
+HELP_MESSAGE = """
+Forgot how to use the bot? 🤣
+
+Here’s a quick guide to get you started:
+
+1.	📸 Send pictures of the food item you want to the bot.
+2.	⏳ Wait for the bot to identify the food item.
+3.	🗂️ Manage your food items in the pantry tracker by clicking on the mini-app menu button next to the chat box.
+4.	⏰ Get automatic reminders when your food items are about to expire.
+"""
+
+
+# * Start handler - process the start command sent by the user to register the user or welcome back
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat is None:
+        return
+
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id,
+        action=telegram.constants.ChatAction.TYPING,
+    )
+
+    message = START_MESSAGE_NEW.format(user=update.effective_chat.first_name)
+
+    # Send the welcome message to the user
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=message,
+    )
+
+
+# * Help handler - process the help command sent by the user to inform about the bot's capabilities
+async def help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat is None:
+        return
+
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id,
+        action=telegram.constants.ChatAction.TYPING,
+    )
+    await context.bot.send_message(chat_id=update.effective_chat.id, text=HELP_MESSAGE)
+
+
+async def pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat is None:
+        return
+
+    if env.MINI_APP_DEEPLINK is None:
+        logger.error("[pin]: MINI_APP_DEEPLINK was not set, unable to send pin message")
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Something went wrong, please try again.",
+        )
+        return
+
+    chat_context = {
+        "chat_id": update.effective_chat.id,
+        "chat_type": update.effective_chat.type,
+    }
+    chat_context_bytes = json.dumps(chat_context).encode("utf-8")
+    base64_encoded = base64.b64encode(chat_context_bytes).decode("utf-8")
+
+    url = env.MINI_APP_DEEPLINK.format(
+        botusername=context.bot.username, mode="compact", command=base64_encoded
+    )
+    inline_button = InlineKeyboardButton("💵 Expenses", url=url)
+    reply_markup = InlineKeyboardMarkup.from_button(inline_button)
+
+    pin_message = await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="🤑 Split your expense leh 🤑",
+        reply_markup=reply_markup,
+    )
+
+    try:
+        await context.bot.pin_chat_message(
+            chat_id=update.effective_chat.id, message_id=pin_message.id
+        )
+    except telegram.error.BadRequest:
+        await pin_message.reply_text(
+            "📌 Pin this for quick access, or make me admin and run /pin@SplitLehBot again to pin automatically"
+        )
+
+
+async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat is None:
+        return
+
+    if env.MINI_APP_DEEPLINK is None:
+        logger.error(
+            "[balance]: MINI_APP_DEEPLINK was not set, unable to send balance message"
+        )
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Something went wrong, please try again.",
+        )
+        return
+
+    user_list = ["Jarrett", "Sean", "Bubu", "Shawnn"]
+    balance_messages = []
+    for user in user_list:
+        deep_link_url = env.MINI_APP_DEEPLINK.format(
+            botusername=context.bot.username, command="group", mode="compact"
+        )
+        user_mention = helpers.mention_markdown(257256809, user, version=2)
+        print(user_mention)
+        user_message = (
+            f"🔵 *{user_mention}* • [🧾𝔹𝕣𝕖𝕒𝕜𝕕𝕠𝕨𝕟🧾]({deep_link_url})\n"
+            f"> Owes Bubu $10\n"
+            f"> Owes Shawnn $20\n"
+        )
+
+        balance_messages.append(user_message)
+
+    text = "*Current Balances*:\n\n"
+    text += "\n\n".join(balance_messages)
+
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=text,
+        parse_mode=telegram.constants.ParseMode.MARKDOWN_V2,
+        disable_web_page_preview=True,
+    )
+
+
+async def chase(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat is None:
+        return
+
+    if update.message is None:
+        return
+
+    if update.effective_chat.type != telegram.constants.ChatType.PRIVATE:
+        await update.message.reply_text(
+            text="⚠️ The 'chase' command is only available in your private chat with the bot"
+        )
+
+    button = KeyboardButtonRequestUsers(
+        request_id=1,
+        user_is_bot=False,
+        request_username=True,
+    )
+
+    reply_markup = ReplyKeyboardMarkup.from_button(
+        KeyboardButton(
+            text="Choose user",
+            request_users=button,
+        ),
+        one_time_keyboard=True,
+        resize_keyboard=True,
+    )
+
+    if update.message:
+        await update.message.reply_text(text="Select user", reply_markup=reply_markup)
+
+
+async def user_shared(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message is None:
+        return
+
+    if update.effective_sender is None:
+        return
+
+    users_shared = update.message.users_shared
+    if users_shared is None:
+        return
+
+    from_user = update.effective_sender
+    shared_user = users_shared.users[0]
+
+    print("shared_user", shared_user)
+
+    try:
+        await context.bot.send_message(
+            shared_user.user_id,
+            f"🤬💩REMINDER: FUCKING PAY BACK {from_user.username} LEH",
+        )
+    except telegram.error.Forbidden:
+        await update.message.reply_text(
+            text=f"⚠️ Failed to send message to {shared_user.username} as it was blocked.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+    except telegram.error.BadRequest:
+        await update.message.reply_text(
+            text=f"⚠️ Failed to send message to {shared_user.username} as they do not have conversation yet.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+    else:
+        await update.message.reply_text(
+            f"✅ Successfully reminded {shared_user.username} to pay up!",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+
+
+async def bot_added(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat is None:
+        return
+
+    if update.message is None:
+        return
+
+    if update.effective_chat.type == telegram.constants.ChatType.PRIVATE:
+        return
+
+    new_members = update.message.new_chat_members
+    if new_members is None:
+        return
+
+    # Check if the bot is in the new members
+    bot = next(
+        filter(
+            lambda x: x.username == x.username == context.bot.username,
+            new_members,
+        )
+    )
+
+    if bot is None:
+        return
+
+    full_chat = await context.bot.get_chat(chat_id=update.effective_chat.id)
+
+    chat_photo_url: Optional[str] = None
+    if full_chat.photo is not None:
+        photo = await context.bot.get_file(full_chat.photo.big_file_id)
+        chat_photo_url = photo.file_path
+
+    api: Optional[Api] = context.bot_data.get("api")
+    if api is None:
+        return logger.error("[bot_added]: Api instance not found in bot_data")
+
+    payload = CreateChatPayload(
+        chat_id=update.effective_chat.id,
+        chat_title=update.effective_chat.title or f"Group:{update.effective_chat.id}",
+        chat_type=update.effective_chat.type,
+        chat_photo_url=chat_photo_url,
+    )
+    api_result = await api.create_chat(payload)
+    if isinstance(api_result, Exception):
+        logger.error(f"[bot_added] - api.create_chat: {api_result}")
+    else:
+        logger.info(f"Chat created: {api_result.message}")
+
+    await update.message.reply_text(
+        text="🎉 Hello friends, I am here to help your split your expense!"
+    )
+
+
+# * Error handler - process the error caused by the update
+async def error(update: Optional[object], context: ContextTypes.DEFAULT_TYPE):
+    """Log the error and send a formatted message to the user/developer."""
+
+    if context.error is None:
+        return
+
+    # Log the error before we do anything else, so we can see it even if something breaks.
+    logger.error("[error]: Exception while handling an update:", exc_info=context.error)
+
+
+async def post_init(application: Application):
+
+    # * Set commands for the bot
+    # *=============================================================================================
+
+    # Commands for all chats
+    common_commands = [
+        BotCommand("start", "Start the bot"),
+        BotCommand("help", "Find out how to use the bot"),
+        BotCommand("pin", "Pin the expenses mini-app"),
+    ]
+
+    # Commands for private chats
+    private_commands = [
+        *common_commands,
+        BotCommand("chase", "Chase someone for payment"),
+    ]
+    await application.bot.set_my_commands(
+        private_commands, scope=BotCommandScopeAllPrivateChats()
+    )
+
+    # Commands for group chats
+    group_commands = [
+        *common_commands,
+        BotCommand("balance", "View current split balances"),
+    ]
+    await application.bot.set_my_commands(
+        group_commands, scope=BotCommandScopeAllGroupChats()
+    )
+    # *=============================================================================================
+
+    # * Set Api instance to the context
+    application.bot_data["api"] = Api()
+
+
+async def post_shutdown(application: Application):
+    # * Clean up the API session
+    api: Api = application.bot_data.get("api")
+    if api is not None:
+        await api.clean_up()
+
+
+def main():
+    application = (
+        ApplicationBuilder()
+        .token(env.TELEGRAM_BOT_TOKEN)
+        .post_init(post_init)
+        .concurrent_updates(True)
+        .build()
+    )
+
+    # Define handlers
+    start_handler = CommandHandler("start", start)
+    help_handler = CommandHandler("help", help)
+    pin_handler = CommandHandler("pin", pin)
+    chase_handler = CommandHandler("chase", chase)
+    user_shared_handler = MessageHandler(
+        filters.StatusUpdate.USERS_SHARED | filters.StatusUpdate.USER_SHARED,
+        user_shared,
+    )
+    bot_added_handler = MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, bot_added)
+    balance_handler = CommandHandler("balance", balance)
+
+    # Register handlers
+    application.add_handler(start_handler)
+    application.add_handler(help_handler)
+    application.add_handler(pin_handler)
+    application.add_handler(balance_handler)
+    application.add_handler(chase_handler)
+    application.add_handler(user_shared_handler)
+    application.add_handler(bot_added_handler)
+    application.add_error_handler(error)
+
+    # Run the bot in polling mode or webhook mode depending on the environment
+    if env.ENV == "production":
+        # Ensure the TELEGRAM_WEBHOOK_URL is set in the environment variables
+        TELEGRAM_WEBHOOK_URL = os.environ.get("TELEGRAM_WEBHOOK_URL")
+        if TELEGRAM_WEBHOOK_URL is None:
+            logger.error("No TELEGRAM_WEBHOOK_URL set in environment variables.")
+            return
+
+        # * Run the bot in production mode with webhook enabled
+        logger.info("Running in production mode, with webhook enabled.")
+        logger.info(f"Webhook URL: {TELEGRAM_WEBHOOK_URL}")
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=int(os.environ.get("PORT", 8443)),
+            secret_token=os.environ.get("TELEGRAM_WEBHOOK_SECRET", "NotSoSecret"),
+            webhook_url=TELEGRAM_WEBHOOK_URL,
+        )
+    else:
+        # * Run the bot in development mode with polling enabled
+        logger.info("Running in development mode, with polling enabled.")
+        application.run_polling()
+
+
+if __name__ == "__main__":
+    main()
