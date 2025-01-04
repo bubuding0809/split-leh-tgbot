@@ -40,25 +40,29 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 START_MESSAGE_EXISITING = """
-Welcome back to Leftunder, {username}! 🌟 We're thrilled to see you again. Here's a quick reminder of the great features you can start using right away.
+Welcome back to SplitLeh, {first_name}! 🌟 We're thrilled to see you again. Here's a quick reminder of the great features you can start using right away.
 
-📋 Pantry Tracker: Organize pantry items and track expiration dates. 
+1.  ...
+2.  ...
 
-💡 Storage Tips: Maximize shelf life with expert storage advice.
-
-🍲 Recipe Generator 🚧: Get recipes based on your available ingredients.
-
-💚 Support Your Community 🚧: Share surplus or find essentials with a tap, ensuring nothing goes to waste.
-
-Start by sending a picture or multiple pictures 📸 of the food items you want to track!
+🚀Start Splitting!
 """
 
-START_MESSAGE_NEW = """
-Welcome to LeftUnder, {user}! 🎉
+START_MESSAGE_PRIVATE = """
+Welcome to SplitLeh, {first_name}! 🎉
 
-We have just signed you up for the LeftUnder food tracker.
+Say goodbye to awkward bill-splitting and hello to hassle-free group expenses! 
 
-Try the food tracker by sending a picture or multiple pictures 📸 of the food items you want to track! 🥗🍎🥖
+How to use me?
+🤝 Add me to a group to start 🤝
+"""
+START_MESSAGE_GROUP = """
+Hey there homies 👋
+
+Let me help you guys manage your shared expenses!
+
+🤔 First time seeing me? 
+⬇️ Register to get started ⬇️
 """
 
 HELP_MESSAGE = """
@@ -66,10 +70,8 @@ Forgot how to use the bot? 🤣
 
 Here’s a quick guide to get you started:
 
-1.	📸 Send pictures of the food item you want to the bot.
-2.	⏳ Wait for the bot to identify the food item.
-3.	🗂️ Manage your food items in the pantry tracker by clicking on the mini-app menu button next to the chat box.
-4.	⏰ Get automatic reminders when your food items are about to expire.
+1.  ...
+2   ...
 """
 
 
@@ -78,18 +80,72 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat is None:
         return
 
+    if update.effective_user is None:
+        return
+
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id,
         action=telegram.constants.ChatAction.TYPING,
     )
 
-    message = START_MESSAGE_NEW.format(user=update.effective_chat.first_name)
+    if update.effective_chat.type == telegram.constants.ChatType.PRIVATE:
+        message = START_MESSAGE_PRIVATE.format(
+            first_name=update.effective_user.first_name
+        )
+        add_group_url = helpers.create_deep_linked_url(
+            context.bot.username, "group_add", group=True
+        )
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=message,
+            reply_markup=InlineKeyboardMarkup.from_button(
+                InlineKeyboardButton(text="Add to group", url=add_group_url)
+            ),
+        )
 
-    # Send the welcome message to the user
-    await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text=message,
+    else:
+        message = START_MESSAGE_GROUP
+        register_url = helpers.create_deep_linked_url(context.bot.username, "register")
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=message,
+            reply_markup=InlineKeyboardMarkup.from_button(
+                InlineKeyboardButton(text="Register", url=register_url)
+            ),
+        )
+
+    # * Try to pin the bot for the chat
+
+    if env.MINI_APP_DEEPLINK is None:
+        logger.error("[pin]: MINI_APP_DEEPLINK was not set, unable to send pin message")
+
+    chat_context = {
+        "chat_id": update.effective_chat.id,
+        "chat_type": update.effective_chat.type,
+    }
+    chat_context_bytes = json.dumps(chat_context).encode("utf-8")
+    base64_encoded = base64.b64encode(chat_context_bytes).decode("utf-8")
+
+    url = env.MINI_APP_DEEPLINK.format(
+        botusername=context.bot.username, mode="compact", command=base64_encoded
     )
+    inline_button = InlineKeyboardButton("💵 Expenses", url=url)
+    reply_markup = InlineKeyboardMarkup.from_button(inline_button)
+
+    pin_message = await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="🤑 Split your expense leh 🤑",
+        reply_markup=reply_markup,
+    )
+
+    try:
+        await context.bot.pin_chat_message(
+            chat_id=update.effective_chat.id, message_id=pin_message.id
+        )
+    except telegram.error.BadRequest:
+        await pin_message.reply_text(
+            "📌 Pin this for quick access, or make me admin and run /pin@SplitLehBot again to pin automatically"
+        )
 
 
 # * Help handler - process the help command sent by the user to inform about the bot's capabilities
@@ -166,7 +222,6 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
             botusername=context.bot.username, command="group", mode="compact"
         )
         user_mention = helpers.mention_markdown(257256809, user, version=2)
-        print(user_mention)
         user_message = (
             f"🔵 *{user_mention}* • [🧾𝔹𝕣𝕖𝕒𝕜𝕕𝕠𝕨𝕟🧾]({deep_link_url})\n"
             f"> Owes Bubu $10\n"
@@ -298,14 +353,17 @@ async def bot_added(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_photo_url=chat_photo_url,
     )
     api_result = await api.create_chat(payload)
+
     if isinstance(api_result, Exception):
         logger.error(f"[bot_added] - api.create_chat: {api_result}")
+        await update.message.reply_text(
+            text="⚠️ Failed to properly initialize the chat. Please try again by removing and re-adding the bot.",
+        )
     else:
         logger.info(f"Chat created: {api_result.message}")
-
-    await update.message.reply_text(
-        text="🎉 Hello friends, I am here to help your split your expense!"
-    )
+        await update.message.reply_text(
+            text="🎉 Hello friends, I am here to help your split your expenses 💸!"
+        )
 
 
 # * Error handler - process the error caused by the update

@@ -1,5 +1,5 @@
 from pprint import pprint
-from typing import Literal, Union
+from typing import Literal
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 import os
