@@ -29,7 +29,7 @@ from telegram.ext import (
     Application,
 )
 from env import env
-from api import Api, CreateChatPayload
+from api import Api, CreateChatPayload, CreateUserPayload
 
 # * Setup loggin
 logging.basicConfig(
@@ -88,6 +88,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         action=telegram.constants.ChatAction.TYPING,
     )
 
+    # * Handle start process for private bot chat
     if update.effective_chat.type == telegram.constants.ChatType.PRIVATE:
         message = START_MESSAGE_PRIVATE.format(
             first_name=update.effective_user.first_name
@@ -95,6 +96,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         add_group_url = helpers.create_deep_linked_url(
             context.bot.username, "group_add", group=True
         )
+
+        api: Optional[Api] = context.bot_data.get("api")
+
+        if api is None:
+            return logger.error("[start]: Api instance not found in bot_data")
+
+        create_user_payload = CreateUserPayload(
+            user_id=update.effective_user.id,
+            first_name=update.effective_user.first_name,
+            last_name=update.effective_user.last_name,
+            username=update.effective_user.username,
+        )
+        api_result = await api.create_user(create_user_payload)
+
+        if isinstance(api_result, Exception):
+            logger.error(f"[start] - api.create_user: {api_result}")
+        else:
+            logger.info(
+                f"[start] - api.create_user: User created: {api_result.message}"
+            )
+
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text=message,
@@ -103,6 +125,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ),
         )
 
+    # * Handle start process for group chat
     else:
         message = START_MESSAGE_GROUP
         register_url = helpers.create_deep_linked_url(context.bot.username, "register")
@@ -115,6 +138,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     # * Try to pin the bot for the chat
+    # * ===============================
 
     if env.MINI_APP_DEEPLINK is None:
         logger.error("[pin]: MINI_APP_DEEPLINK was not set, unable to send pin message")

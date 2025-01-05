@@ -20,6 +20,17 @@ class CreateChatResult(ApiResult):
     pass
 
 
+class CreateUserPayload(BaseModel):
+    user_id: int
+    first_name: str
+    last_name: Optional[str] = Field(default=None)
+    username: Optional[str] = Field(default=None)
+
+
+class CreateUserResult(ApiResult):
+    pass
+
+
 class Api:
     def __init__(self):
         self.default_headers = {"Authorization": f"Bearer {env.API_KEY}"}
@@ -27,6 +38,24 @@ class Api:
             base_url=env.API_BASE_URL,
             headers=self.default_headers,
         )
+
+    async def create_user(
+        self, payload: CreateUserPayload
+    ) -> Union[CreateUserResult, Exception]:
+        try:
+            async with self.aio_session.post(
+                "user",
+                json=payload.model_dump_json(),
+            ) as response:
+                response.raise_for_status()
+                res = await response.json()
+
+                return CreateUserResult(
+                    status=response.status,
+                    message=res.get("message"),
+                )
+        except Exception as e:
+            return e
 
     async def create_chat(
         self, payload: CreateChatPayload
