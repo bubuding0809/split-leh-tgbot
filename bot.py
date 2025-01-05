@@ -1,18 +1,16 @@
 import base64
-import html
 import json
 import logging
 import os
-import traceback
 from typing import Optional
 import telegram
 from telegram import (
     BotCommand,
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
+    KeyboardButtonRequestUsers,
     KeyboardButton,
     ReplyKeyboardMarkup,
-    KeyboardButtonRequestUsers,
     ReplyKeyboardRemove,
     Update,
     InlineKeyboardButton,
@@ -73,6 +71,8 @@ Here’s a quick guide to get you started:
 1.  ...
 2   ...
 """
+
+CHASE_USER_REQUEST, ADD_MEMBER_REQUEST = range(2)
 
 
 # * Start handler - process the start command sent by the user to register the user or welcome back
@@ -278,7 +278,7 @@ async def chase(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     button = KeyboardButtonRequestUsers(
-        request_id=1,
+        request_id=0,
         user_is_bot=False,
         request_username=True,
     )
@@ -307,31 +307,45 @@ async def user_shared(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if users_shared is None:
         return
 
-    from_user = update.effective_sender
-    shared_user = users_shared.users[0]
+    if users_shared.request_id == ADD_MEMBER_REQUEST:
+        user_data = context.user_data
+        if user_data is None:
+            return
 
-    print("shared_user", shared_user)
+        group_id = user_data.get("target_group_id")
+        names = [user.first_name or str(user.user_id) for user in users_shared.users]
+        names_str = ", ".join(names)
 
-    try:
-        await context.bot.send_message(
-            shared_user.user_id,
-            f"🤬💩REMINDER: FUCKING PAY BACK {from_user.username} LEH",
-        )
-    except telegram.error.Forbidden:
         await update.message.reply_text(
-            text=f"⚠️ Failed to send message to {shared_user.username} as it was blocked.",
+            text=f"Adding {names_str} to group: {group_id}",
             reply_markup=ReplyKeyboardRemove(),
         )
-    except telegram.error.BadRequest:
-        await update.message.reply_text(
-            text=f"⚠️ Failed to send message to {shared_user.username} as they do not have conversation yet.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
-    else:
-        await update.message.reply_text(
-            f"✅ Successfully reminded {shared_user.username} to pay up!",
-            reply_markup=ReplyKeyboardRemove(),
-        )
+        return
+
+    if users_shared.request_id == CHASE_USER_REQUEST:
+        from_user = update.effective_sender
+        shared_user = users_shared.users[0]
+
+        try:
+            await context.bot.send_message(
+                shared_user.user_id,
+                f"🤬💩REMINDER: FUCKING PAY BACK {from_user.username} LEH",
+            )
+        except telegram.error.Forbidden:
+            await update.message.reply_text(
+                text=f"⚠️ Failed to send message to {shared_user.username} as it was blocked.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+        except telegram.error.BadRequest:
+            await update.message.reply_text(
+                text=f"⚠️ Failed to send message to {shared_user.username} as they do not have conversation yet.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+        else:
+            await update.message.reply_text(
+                f"✅ Successfully reminded {shared_user.username} to pay up!",
+                reply_markup=ReplyKeyboardRemove(),
+            )
 
 
 async def bot_added(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -388,6 +402,40 @@ async def bot_added(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             text="🎉 Hello friends, I am here to help your split your expenses 💸!"
         )
+
+
+async def add_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message is None:
+        return
+
+    if not context.args:
+        logger.error("[add_member]: Empty add_member args")
+        return
+
+    if len(context.args) != 2:
+        logger.error(f"[add_member]: Invalid add_member args - ${context.args}")
+
+    group_id = context.args.pop()
+
+    # Make the group_id avaiable to the user_shared callback via context
+    user_data = context.user_data
+    if user_data is not None:
+        user_data["target_group_id"] = group_id
+
+    button = KeyboardButton(
+        text="Select Users 🧑‍🧒‍🧒",
+        request_users=KeyboardButtonRequestUsers(
+            request_id=1,
+            request_name=True,
+            request_username=True,
+            max_quantity=telegram.constants.KeyboardButtonRequestUsersLimit.MAX_QUANTITY,
+            user_is_bot=False,
+        ),
+    )
+    await update.message.reply_text(
+        text=f"Choose users to add to group: {group_id} ⌨",
+        reply_markup=ReplyKeyboardMarkup([[button]], one_time_keyboard=True),
+    )
 
 
 # * Error handler - process the error caused by the update
@@ -463,15 +511,21 @@ def main():
     )
     bot_added_handler = MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, bot_added)
     balance_handler = CommandHandler("balance", balance)
+    add_member_handler = CommandHandler(
+        "start", add_member, filters.Regex("ADD_MEMBER")
+    )
 
     # Register handlers
-    application.add_handler(start_handler)
     application.add_handler(help_handler)
     application.add_handler(pin_handler)
     application.add_handler(balance_handler)
     application.add_handler(chase_handler)
     application.add_handler(user_shared_handler)
     application.add_handler(bot_added_handler)
+    application.add_handler(add_member_handler)
+    application.add_handler(start_handler)
+
+    # Special handler for general errors
     application.add_error_handler(error)
 
     # Run the bot in polling mode or webhook mode depending on the environment
