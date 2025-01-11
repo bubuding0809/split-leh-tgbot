@@ -31,6 +31,15 @@ class CreateUserResult(ApiResult):
     pass
 
 
+class AddMemberPayload(BaseModel):
+    chat_id: int
+    user_id: int
+
+
+class AddMemberResult(ApiResult):
+    pass
+
+
 class Api:
     def __init__(self):
         self.default_headers = {"Authorization": f"Bearer {env.API_KEY}"}
@@ -69,6 +78,24 @@ class Api:
                 res = await response.json()
 
                 return CreateChatResult(
+                    status=response.status,
+                    message=res.get("message"),
+                )
+        except Exception as e:
+            return e
+
+    async def add_member(
+        self, payload: AddMemberPayload
+    ) -> Union[AddMemberResult, Exception]:
+        try:
+            async with self.aio_session.patch(
+                "chat/addMember",
+                json=payload.model_dump_json(),
+            ) as response:
+                response.raise_for_status()
+                res = await response.json()
+
+                return AddMemberResult(
                     status=response.status,
                     message=res.get("message"),
                 )

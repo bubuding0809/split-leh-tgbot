@@ -1,8 +1,9 @@
+import asyncio
 import base64
 import json
 import logging
 import os
-from typing import Optional
+from typing import Optional, cast
 import telegram
 from telegram import (
     BotCommand,
@@ -27,7 +28,7 @@ from telegram.ext import (
     Application,
 )
 from env import env
-from api import Api, CreateChatPayload, CreateUserPayload
+from api import AddMemberPayload, Api, CreateChatPayload, CreateUserPayload
 
 # * Setup loggin
 logging.basicConfig(
@@ -73,6 +74,7 @@ Here’s a quick guide to get you started:
 """
 
 CHASE_USER_REQUEST, ADD_MEMBER_REQUEST = range(2)
+ADD_MEMBER_COMMAND = "ADD_MEMBER"
 
 
 # * Start handler - process the start command sent by the user to register the user or welcome back
@@ -313,11 +315,35 @@ async def user_shared(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         group_id = user_data.get("target_group_id")
+        if group_id is None:
+            logger.error("[user_shared] - ADD_MEMBER_REQUEST: group_id is None")
+            return
+
+        api = cast(Api, context.bot_data.get("api"))
+
+        add_member_tasks = [
+            api.add_member(
+                AddMemberPayload(chat_id=int(group_id), user_id=user.user_id)
+            )
+            for user in users_shared.users
+        ]
+        results = await asyncio.gather(*add_member_tasks)
+        logger.info(
+            "[user_shared] - ADD_MEMBER_REQUEST: add member api results", results
+        )
+
         names = [user.first_name or str(user.user_id) for user in users_shared.users]
-        names_str = ", ".join(names)
+
+        success = []
+        failure = []
+        for api_result, name in zip(results, names):
+            if isinstance(api_result, Exception):
+                failure.append(name)
+            else:
+                success.append(name)
 
         await update.message.reply_text(
-            text=f"Adding {names_str} to group: {group_id}",
+            text=f"Added {', '.join(success)} to the group:\n 🧑‍🧒‍🧒 {group_id} 🧑‍🧒‍🧒\n\nFailed to add {', '.join(failure)}",
             reply_markup=ReplyKeyboardRemove(),
         )
         return
@@ -412,10 +438,13 @@ async def add_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error("[add_member]: Empty add_member args")
         return
 
-    if len(context.args) != 2:
-        logger.error(f"[add_member]: Invalid add_member args - ${context.args}")
-
     group_id = context.args.pop()
+
+    if not group_id.startswith(ADD_MEMBER_COMMAND):
+        logger.error("[add_member]: Invalid parameter")
+        return
+
+    group_id = group_id.replace(ADD_MEMBER_COMMAND, "")
 
     # Make the group_id avaiable to the user_shared callback via context
     user_data = context.user_data
@@ -433,7 +462,7 @@ async def add_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ),
     )
     await update.message.reply_text(
-        text=f"Choose users to add to group: {group_id} ⌨",
+        text=f"Choose users to add to group:\n 🧑‍🧒‍🧒 {group_id} 🧑‍🧒‍🧒",
         reply_markup=ReplyKeyboardMarkup([[button]], one_time_keyboard=True),
     )
 
