@@ -28,7 +28,13 @@ from telegram.ext import (
     Application,
 )
 from env import env
-from api import AddMemberPayload, Api, CreateChatPayload, CreateUserPayload
+from api import (
+    AddMemberPayload,
+    Api,
+    CreateChatPayload,
+    CreateUserPayload,
+    GetUserPayload,
+)
 
 # * Setup loggin
 logging.basicConfig(
@@ -39,7 +45,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 START_MESSAGE_EXISITING = """
-Welcome back to SplitLeh, {first_name}! 🌟 We're thrilled to see you again. Here's a quick reminder of the great features you can start using right away.
+Welcome back to Banana Splitz, {first_name}! 🌟 We're thrilled to see you again. Here's a quick reminder of the great features you can start using right away.
 
 1.  ...
 2.  ...
@@ -79,6 +85,7 @@ ADD_MEMBER_COMMAND = "ADD_MEMBER"
 
 # * Start handler - process the start command sent by the user to register the user or welcome back
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     if update.effective_chat is None:
         return
 
@@ -91,19 +98,43 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     # * Handle start process for private bot chat
+    # * ==========================================
     if update.effective_chat.type == telegram.constants.ChatType.PRIVATE:
-        message = START_MESSAGE_PRIVATE.format(
-            first_name=update.effective_user.first_name
-        )
-        add_group_url = helpers.create_deep_linked_url(
-            context.bot.username, "group_add", group=True
-        )
 
         api: Optional[Api] = context.bot_data.get("api")
-
         if api is None:
             return logger.error("[start]: Api instance not found in bot_data")
 
+        # * Check if user exits
+        get_user_result = await api.get_user(
+            GetUserPayload(user_id=update.effective_user.id)
+        )
+        if isinstance(get_user_result, Exception):
+            logger.error(f"[start] - api.get_user: {get_user_result}")
+            return await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="⚠️ Something went wrong checking user, please try again.",
+            )
+
+        # * User exists - send welcome back message
+        if get_user_result.user is not None:
+            logger.info(f"[start] - api.get_user: User exists: {get_user_result.user}")
+            return await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=START_MESSAGE_EXISITING.format(
+                    first_name=update.effective_user.first_name
+                ),
+                reply_markup=InlineKeyboardMarkup.from_button(
+                    InlineKeyboardButton(
+                        text="Add to group",
+                        url=helpers.create_deep_linked_url(
+                            context.bot.username, "group_add", group=True
+                        ),
+                    )
+                ),
+            )
+
+        # * User does not exist - create user
         create_user_payload = CreateUserPayload(
             user_id=update.effective_user.id,
             first_name=update.effective_user.first_name,
@@ -114,6 +145,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if isinstance(api_result, Exception):
             logger.error(f"[start] - api.create_user: {api_result}")
+            return await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="⚠️ Something went wrong creating user, please try again.",
+            )
         else:
             logger.info(
                 f"[start] - api.create_user: User created: {api_result.message}"
@@ -121,13 +156,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=message,
+            text=START_MESSAGE_PRIVATE.format(
+                first_name=update.effective_user.first_name
+            ),
             reply_markup=InlineKeyboardMarkup.from_button(
-                InlineKeyboardButton(text="Add to group", url=add_group_url)
+                InlineKeyboardButton(
+                    text="Add to group",
+                    url=helpers.create_deep_linked_url(
+                        context.bot.username, "group_add", group=True
+                    ),
+                )
             ),
         )
 
     # * Handle start process for group chat
+    # * ====================================
     else:
         message = START_MESSAGE_GROUP
         register_url = helpers.create_deep_linked_url(context.bot.username, "register")
