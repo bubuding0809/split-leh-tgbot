@@ -50,7 +50,7 @@ Welcome back to Banana Splitz, {first_name}! 🌟 We're thrilled to see you agai
 1.  ...
 2.  ...
 
-🚀Start Splitting!
+🚀 Start Splitting!
 """
 
 START_MESSAGE_PRIVATE = """
@@ -62,12 +62,12 @@ How to use me?
 🤝 Add me to a group to start 🤝
 """
 START_MESSAGE_GROUP = """
-Hey there homies 👋
+🍌 Hey there homies 👋
 
 Let me help you guys manage your shared expenses!
 
 🤔 First time seeing me? 
-⬇️ Register to get started ⬇️
+⬇️ Get started below ⬇️
 """
 
 HELP_MESSAGE = """
@@ -178,7 +178,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id=update.effective_chat.id,
             text=message,
             reply_markup=InlineKeyboardMarkup.from_button(
-                InlineKeyboardButton(text="Register", url=register_url)
+                InlineKeyboardButton(text="Start app 🚀", url=register_url)
             ),
         )
 
@@ -198,7 +198,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = env.MINI_APP_DEEPLINK.format(
         botusername=context.bot.username, mode="compact", command=base64_encoded
     )
-    inline_button = InlineKeyboardButton("💵 Expenses", url=url)
+    inline_button = InlineKeyboardButton("Expenses 💵", url=url)
     reply_markup = InlineKeyboardMarkup.from_button(inline_button)
 
     pin_message = await context.bot.send_message(
