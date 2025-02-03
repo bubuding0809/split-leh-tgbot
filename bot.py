@@ -79,11 +79,30 @@ Here’s a quick guide to get you started:
 2   ...
 """
 
+ADD_MEMBER_START_MESSAGE = """
+Your friends still haven\\'t joined the group? 🤔
+
+> 🧑‍🧒‍🧒 {group_title} 🧑‍🧒‍🧒 
+
+
+No worries, you can help them join by sharing their contact with me\\!
+
+⌨️ Share via the keyboard button ⌨️
+"""
+
+ADD_MEMBER_END_MESSAGE = """
+🎉 Successfully added:
+{member_list}
+
+
+🚨 Failed to add:
+{failed_list}
+"""
+
 CHASE_USER_REQUEST, ADD_MEMBER_REQUEST = range(2)
 ADD_MEMBER_COMMAND = "ADD_MEMBER"
 
 
-# * Start handler - process the start command sent by the user to register the user or welcome back
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if update.effective_chat is None:
@@ -217,7 +236,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# * Help handler - process the help command sent by the user to inform about the bot's capabilities
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat is None:
+        return
+
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id,
+        action=telegram.constants.ChatAction.TYPING,
+    )
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id, text="Current operation cancelled."
+    )
+
+
 async def help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat is None:
         return
@@ -366,14 +397,17 @@ async def user_shared(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         add_member_tasks = [
             api.add_member(
-                AddMemberPayload(chat_id=int(group_id), user_id=user.user_id)
+                AddMemberPayload(
+                    chat_id=int(group_id),
+                    user_id=user.user_id,
+                    first_name=user.first_name or "",
+                    last_name=user.last_name,
+                    username=user.username,
+                )
             )
             for user in users_shared.users
         ]
         results = await asyncio.gather(*add_member_tasks)
-        logger.info(
-            "[user_shared] - ADD_MEMBER_REQUEST: add member api results", results
-        )
 
         names = [user.first_name or str(user.user_id) for user in users_shared.users]
 
@@ -385,9 +419,36 @@ async def user_shared(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 success.append(name)
 
+        logger.info(f"Added {', '.join(success)} to the group {group_id}")
+        logger.info(f"Failed to add {', '.join(failure)} to the group {group_id}")
+
+        text = ADD_MEMBER_END_MESSAGE.format(
+            member_list=(
+                "\n".join(
+                    [
+                        f"> {telegram.helpers.escape_markdown(name, version=2)}"
+                        for name in success
+                    ]
+                )
+                if success
+                else "> None"
+            ),
+            failed_list=(
+                "\n".join(
+                    [
+                        f"> {telegram.helpers.escape_markdown(name, version=2)}"
+                        for name in failure
+                    ]
+                )
+                if failure
+                else "> None"
+            ),
+        )
+
         await update.message.reply_text(
-            text=f"Added {', '.join(success)} to the group:\n 🧑‍🧒‍🧒 {group_id} 🧑‍🧒‍🧒\n\nFailed to add {', '.join(failure)}",
+            text=text,
             reply_markup=ReplyKeyboardRemove(),
+            parse_mode=ParseMode.MARKDOWN_V2,
         )
         return
 
@@ -494,8 +555,12 @@ async def add_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_data is not None:
         user_data["target_group_id"] = group_id
 
+    chat_info = await context.bot.get_chat(chat_id=group_id)
+    cancel_button = KeyboardButton(
+        text="/cancel",
+    )
     button = KeyboardButton(
-        text="Select Users 🧑‍🧒‍🧒",
+        text=f"Select Users 🧑‍🧒‍🧒",
         request_users=KeyboardButtonRequestUsers(
             request_id=1,
             request_name=True,
@@ -504,13 +569,19 @@ async def add_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_is_bot=False,
         ),
     )
+
+    text = ADD_MEMBER_START_MESSAGE.format(
+        group_title=telegram.helpers.escape_markdown(chat_info.title or "", version=2)
+    )
     await update.message.reply_text(
-        text=f"Choose users to add to group:\n 🧑‍🧒‍🧒 {group_id} 🧑‍🧒‍🧒",
-        reply_markup=ReplyKeyboardMarkup([[button]], one_time_keyboard=True),
+        text=text,
+        reply_markup=ReplyKeyboardMarkup(
+            [[cancel_button, button]], one_time_keyboard=True, resize_keyboard=True
+        ),
+        parse_mode=ParseMode.MARKDOWN_V2,
     )
 
 
-# * Error handler - process the error caused by the update
 async def error(update: Optional[object], context: ContextTypes.DEFAULT_TYPE):
     """Log the error and send a formatted message to the user/developer."""
 
@@ -574,6 +645,7 @@ def main():
 
     # Define handlers
     start_handler = CommandHandler("start", start)
+    cancel_handler = CommandHandler("cancel", cancel)
     help_handler = CommandHandler("help", help)
     pin_handler = CommandHandler("pin", pin)
     chase_handler = CommandHandler("chase", chase)
@@ -584,7 +656,7 @@ def main():
     bot_added_handler = MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, bot_added)
     balance_handler = CommandHandler("balance", balance)
     add_member_handler = CommandHandler(
-        "start", add_member, filters.Regex("ADD_MEMBER")
+        "start", add_member, filters.Regex(ADD_MEMBER_COMMAND)
     )
 
     # Register handlers
@@ -595,6 +667,7 @@ def main():
     application.add_handler(user_shared_handler)
     application.add_handler(bot_added_handler)
     application.add_handler(add_member_handler)
+    application.add_handler(cancel_handler)
     application.add_handler(start_handler)
 
     # Special handler for general errors

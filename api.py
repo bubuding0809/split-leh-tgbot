@@ -51,6 +51,9 @@ class CreateUserResult(ApiResult):
 class AddMemberPayload(BaseModel):
     chat_id: int
     user_id: int
+    first_name: str
+    last_name: Optional[str] = Field(default=None)
+    username: Optional[str] = Field(default=None)
 
 
 class AddMemberResult(ApiResult):
@@ -143,6 +146,9 @@ class Api:
                 f"chat/{payload.chat_id}/members",
                 json={
                     "user_id": payload.user_id,
+                    "first_name": payload.first_name,
+                    "last_name": payload.last_name,
+                    "username": payload.username,
                 },
             ) as response:
                 response.raise_for_status()
